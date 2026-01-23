@@ -4,11 +4,13 @@ import json
 import glob
 from datetime import datetime
 from dotenv import load_dotenv
+
+from langchain.chains import LLMChain
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_core.messages import HumanMessage, AIMessage
+
 from tools import tools, tool_map
 from schema import SupportOutput
 
@@ -21,26 +23,24 @@ parser = PydanticOutputParser(pydantic_object=SupportOutput)
 # --- Prompt ---
 prompt = ChatPromptTemplate.from_messages([
     ("system", """
-You are a professional, empathetic, and knowledgeable **Insurance Support Assistant**.
+You are a professional, empathetic, and knowledgeable *Insurance Support Assistant*.
 
 ### Core Responsibilities:
-1. **Retrieve Information:** Always use the `search_kb` function first to find answers in the insurance FAQ knowledge base.  
-2. **Escalate When Needed:** If the requested information is unclear, incomplete, or unavailable, use the `create_ticket` function to escalate the issue to a human representative.  
-3. **Maintain Records:** After every interaction, use the `save_log` function to record the conversation summary and resolution status.  
-4. **Tone & Style:** Be courteous, concise, and empathetic. Use plain, customer-friendly language while maintaining professionalism and accuracy.
+1. *Retrieve Information:* Always use the search_kb function first to find answers in the insurance FAQ knowledge base.  
+2. *Escalate When Needed:* If the requested information is unclear, incomplete, or unavailable, use the create_ticket function to escalate the issue to a human representative.  
+3. *Maintain Records:* After every interaction, use the save_log function to record the conversation summary and resolution status.  
+4. *Tone & Style:* Be courteous, concise, and empathetic. Use plain, customer-friendly language while maintaining professionalism and accuracy.
 
 ### Response Format:
-Respond **only** in the following JSON structure:
+Respond *only* in the following JSON structure:
 {format_instructions}
 """),
     ("placeholder", "{chat_history}"),
-    ("human", "{query}"),
-    ("placeholder", "{agent_scratchpad}")
+    ("human", "{query}")
 ]).partial(format_instructions=parser.get_format_instructions())
 
-# --- Agent Setup ---
-agent = create_tool_calling_agent(llm=llm, prompt=prompt, tools=tools)
-executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
+# --- LLM Chain (Gemini-compatible) ---
+chain = LLMChain(llm=llm, prompt=prompt)
 
 # --- Streamlit Page ---
 st.set_page_config(page_title="Insurance Support Assistant", page_icon="🤖", layout="centered")
@@ -110,8 +110,7 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    st.markdown("💡 **Tips:**\n- Ask specific insurance questions\n- Use plain language\n- Type ‘End & Save Session’ to archive your chat")
-
+    st.markdown("💡 *Tips:*\n- Ask specific insurance questions\n- Use plain language\n- Type ‘End & Save Session’ to archive your chat")
 
 # --- Display existing messages ---
 for msg in st.session_state.chat_history:
@@ -129,17 +128,24 @@ if user_query:
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                result = executor.invoke({"query": user_query, "chat_history": st.session_state.chat_history})
-                structured = parser.parse(result["output"])
+                result = chain.invoke({
+                    "query": user_query,
+                    "chat_history": st.session_state.chat_history
+                })
+
+                structured = parser.parse(result["text"])
+
                 st.markdown(structured.answer)
+
                 if structured.sources:
                     with st.expander("📚 Sources"):
                         st.write("\n".join(structured.sources))
+
                 if structured.action_taken:
                     st.info(structured.action_taken)
+
                 st.session_state.chat_history.append(AIMessage(content=structured.answer))
-                save_session_to_file()  # ✅ Auto-save after each exchange
+                save_session_to_file()
+
             except Exception as e:
                 st.error(f"⚠️ Error: {e}")
-        
-        
